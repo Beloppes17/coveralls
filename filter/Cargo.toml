@@ -1,0 +1,12 @@
+[package]
+name = "av-filter"
+description = "Multimedia filtering library"
+version = "0.1.0"
+authors = ["Luni-4 <luni-4@hotmail.it>"]
+license = "MIT"
+edition = "2021"
+repository = "https://github.com/rust-av/rust-av"
+
+[dependencies]
+av-format = "0.5.0"
+av-data = "0.3.0"
