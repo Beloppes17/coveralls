@@ -65,17 +65,20 @@ where
 
 /// Used to implement muxing operations.
 pub trait Muxer: Send {
+    /// Writer used for a muxer.
+    type Writer: Write;
+
     /// Configures a muxer.
     fn configure(&mut self) -> Result<()>;
     /// Writes a stream header into a data structure implementing
     /// the `Write` trait.
-    fn write_header<W: Write>(&mut self, out: &mut Writer<W>) -> Result<()>;
+    fn write_header(&mut self, out: &mut Self::Writer) -> Result<()>;
     /// Writes a stream packet into a data structure implementing
     /// the `Write` trait.
-    fn write_packet<W: Write>(&mut self, out: &mut Writer<W>, pkt: Arc<Packet>) -> Result<()>;
+    fn write_packet(&mut self, out: &mut Self::Writer, pkt: Arc<Packet>) -> Result<()>;
     /// Writes a stream trailer into a data structure implementing
     /// the `Write` trait.
-    fn write_trailer<W: Write>(&mut self, out: &mut Writer<W>) -> Result<()>;
+    fn write_trailer(&mut self, out: &mut Self::Writer) -> Result<()>;
 
     /// Sets global media file information for a muxer.
     fn set_global_info(&mut self, info: GlobalInfo) -> Result<()>;
@@ -97,7 +100,7 @@ pub struct Context<M: Muxer + Send, W: Write> {
     pub user_private: Option<Box<dyn Any + Send + Sync>>,
 }
 
-impl<M: Muxer, W: Write> Context<M, W> {
+impl<M: Muxer<Writer = Writer<W>>, W: Write> Context<M, W> {
     /// Creates a new `Context` instance.
     pub fn new(muxer: M, writer: Writer<W>) -> Self {
         Context {
@@ -222,22 +225,24 @@ mod test {
     }
 
     impl Muxer for DummyMuxer {
+        type Writer = Writer<Vec<u8>>;
+
         fn configure(&mut self) -> Result<()> {
             Ok(())
         }
 
-        fn write_header<W: Write>(&mut self, out: &mut Writer<W>) -> Result<()> {
+        fn write_header(&mut self, out: &mut Self::Writer) -> Result<()> {
             let buf = b"Dummy header";
             out.write_all(buf.as_slice()).unwrap();
             Ok(())
         }
 
-        fn write_packet<W: Write>(&mut self, out: &mut Writer<W>, pkt: Arc<Packet>) -> Result<()> {
+        fn write_packet(&mut self, out: &mut Self::Writer, pkt: Arc<Packet>) -> Result<()> {
             out.write_all(&pkt.data).unwrap();
             Ok(())
         }
 
-        fn write_trailer<W: Write>(&mut self, out: &mut Writer<W>) -> Result<()> {
+        fn write_trailer(&mut self, out: &mut Self::Writer) -> Result<()> {
             let buf = b"Dummy trailer";
             out.write_all(buf.as_slice()).unwrap();
             Ok(())
