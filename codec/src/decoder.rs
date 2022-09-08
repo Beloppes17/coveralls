@@ -25,7 +25,7 @@ pub trait Decoder: Send + Sync {
 /// Codec descriptor.
 ///
 /// Contains information on a codec and its own decoder.
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct Descr {
     /// The codec name.
     pub codec: &'static str,
@@ -40,19 +40,19 @@ pub struct Descr {
 
 /// Auxiliary structure to encapsulate a decoder object and
 /// its additional data.
-pub struct Context<D: Decoder> {
-    dec: D,
+pub struct Context {
+    dec: Box<dyn Decoder>,
     // TODO: Queue up packets/frames
 }
 
-impl<D: Decoder> Context<D> {
+impl Context {
     // TODO: More constructors
-    /// Retrieves a codec descriptor from a codec list through its name,
-    /// creates the relative decoder, and encapsulates it into a new `Context`.
-    pub fn by_name<T: Descriptor<OutputDecoder = D> + ?Sized>(
-        codecs: &Codecs<T>,
-        name: &str,
-    ) -> Option<Self> {
+    /// Creates the decoder associated to a codec descriptor and encapsulates
+    /// it into a new `Context`.
+    ///
+    /// The codec descriptor is contained in a codec list and retrieved by its
+    /// name.
+    pub fn by_codecs(codecs: &Codecs, name: &str) -> Option<Self> {
         codecs.by_name(name).map(|builder| Context {
             dec: builder.create(),
         })
@@ -79,31 +79,23 @@ impl<D: Decoder> Context<D> {
     pub fn flush(&mut self) -> Result<()> {
         self.dec.flush()
     }
-
-    /// Returns the underlying decoder.
-    pub fn decoder(&self) -> &D {
-        &self.dec
-    }
 }
 
 /// Used to get the descriptor of a codec and create its own decoder.
 pub trait Descriptor {
-    /// The specific type of the decoder.
-    type OutputDecoder: Decoder;
-
     /// Creates a new decoder for the requested codec.
-    fn create(&self) -> Self::OutputDecoder;
+    fn create(&self) -> Box<dyn Decoder>;
     /// Returns the codec descriptor.
     fn describe(&self) -> &Descr;
 }
 
 /// A list of codec descriptors.
-pub struct Codecs<T: 'static + Descriptor + ?Sized> {
-    list: HashMap<&'static str, Vec<&'static T>>,
+pub struct Codecs {
+    list: HashMap<&'static str, Vec<&'static dyn Descriptor>>,
 }
 
-impl<T: Descriptor + ?Sized> CodecList for Codecs<T> {
-    type D = T;
+impl CodecList for Codecs {
+    type D = dyn Descriptor;
 
     fn new() -> Self {
         Self {
@@ -130,67 +122,141 @@ impl<T: Descriptor + ?Sized> CodecList for Codecs<T> {
 mod test {
     use super::*;
 
-    mod dummy {
-        use super::super::*;
+    macro_rules! dec {
+        ($mod_name:ident, $dec_name:expr, $descriptor:ident) => {
+            mod $mod_name {
+                use super::super::*;
 
-        pub struct Dec {
-            state: usize,
-        }
-
-        pub struct Des {
-            descr: Descr,
-        }
-
-        impl Descriptor for Des {
-            type OutputDecoder = Dec;
-
-            fn create(&self) -> Self::OutputDecoder {
-                Dec { state: 0 }
-            }
-
-            fn describe(&self) -> &Descr {
-                &self.descr
-            }
-        }
-
-        impl Decoder for Dec {
-            fn configure(&mut self) -> Result<()> {
-                Ok(())
-            }
-            fn set_extradata(&mut self, extra: &[u8]) {
-                if extra.len() > 4 {
-                    self.state = 42;
-                } else {
-                    self.state = 12;
+                // A decoder is a private structure not accessible in a direct
+                // way, only through a context.
+                struct Dec {
+                    state: usize,
                 }
-            }
-            fn send_packet(&mut self, _packet: &Packet) -> Result<()> {
-                self.state += 1;
-                Ok(())
-            }
-            fn receive_frame(&mut self) -> Result<ArcFrame> {
-                unimplemented!()
-            }
-            fn flush(&mut self) -> Result<()> {
-                Ok(())
-            }
-        }
 
-        pub const DUMMY_DESCR: &Des = &Des {
-            descr: Descr {
-                codec: "dummy",
-                name: "dummy",
-                desc: "Dummy decoder",
-                mime: "x-application/dummy",
-            },
+                impl Dec {
+                    fn new(state: usize) -> Self {
+                        Self { state }
+                    }
+                }
+
+                /// A decoder descriptor.
+                pub struct Des {
+                    descr: Descr,
+                }
+
+                impl Descriptor for Des {
+                    fn create(&self) -> Box<dyn Decoder> {
+                        Box::new(Dec::new(0))
+                    }
+
+                    fn describe(&self) -> &Descr {
+                        &self.descr
+                    }
+                }
+
+                impl Decoder for Dec {
+                    fn configure(&mut self) -> Result<()> {
+                        Ok(())
+                    }
+                    fn set_extradata(&mut self, extra: &[u8]) {
+                        if extra.len() > 4 {
+                            self.state = 42;
+                        } else {
+                            self.state = 12;
+                        }
+                    }
+
+                    fn send_packet(&mut self, _packet: &Packet) -> Result<()> {
+                        self.state += 1;
+                        Ok(())
+                    }
+
+                    fn receive_frame(&mut self) -> Result<ArcFrame> {
+                        let yuv420 = *av_data::pixel::formats::YUV420;
+                        let fm = std::sync::Arc::new(yuv420);
+                        let video_info = av_data::frame::VideoInfo::new(
+                            42,
+                            42,
+                            false,
+                            av_data::frame::FrameType::I,
+                            fm,
+                        );
+                        Ok(std::sync::Arc::new(
+                            av_data::frame::Frame::new_default_frame(
+                                av_data::frame::MediaKind::Video(video_info),
+                                None,
+                            ),
+                        ))
+                    }
+
+                    fn flush(&mut self) -> Result<()> {
+                        Ok(())
+                    }
+                }
+
+                pub const $descriptor: &Des = &Des {
+                    descr: Descr {
+                        codec: $dec_name,
+                        name: $dec_name,
+                        desc: concat!($dec_name, "decoder"),
+                        mime: concat!("x-application/", $dec_name),
+                    },
+                };
+            }
+            use self::$mod_name::$descriptor;
         };
     }
-    use self::dummy::DUMMY_DESCR;
+
+    dec!(dummy_dec, "dummy", DUMMY_DESCR);
+    dec!(dummy_dec1, "dummy1", DUMMY_DESCR1);
 
     #[test]
-    fn lookup() {
-        let codecs = Codecs::from_list(&[DUMMY_DESCR]);
+    fn lookup_append() {
+        let mut codecs = Codecs::new();
+        codecs.append(DUMMY_DESCR);
+        codecs.append(DUMMY_DESCR1);
 
-        let _dec = codecs.by_name("dummy").unwrap();
+        codecs.by_name("dummy").unwrap();
+        codecs.by_name("dummy1").unwrap();
+    }
+
+    #[test]
+    fn lookup_from_list() {
+        let codecs = Codecs::from_list(&[DUMMY_DESCR, DUMMY_DESCR1]);
+
+        codecs.by_name("dummy").unwrap();
+        codecs.by_name("dummy1").unwrap();
+    }
+
+    #[test]
+    #[should_panic]
+    fn lookup_no_decoder() {
+        let codecs = Codecs::from_list(&[DUMMY_DESCR, DUMMY_DESCR1]);
+
+        codecs.by_name("dummy2").unwrap();
+    }
+
+    #[test]
+    fn descriptor_data() {
+        let codecs = Codecs::from_list(&[DUMMY_DESCR]);
+        let descriptor = codecs.by_name("dummy").unwrap();
+        assert_eq!(
+            descriptor.describe(),
+            &Descr {
+                codec: "dummy",
+                name: "dummy",
+                desc: "dummy decoder",
+                mime: "x-application/dummy",
+            }
+        )
+    }
+
+    #[test]
+    fn context() {
+        let codecs = Codecs::from_list(&[DUMMY_DESCR]);
+        let packet = Packet::zeroed(10);
+
+        let mut context = Context::by_codecs(&codecs, "dummy").unwrap();
+        context.send_packet(&packet).unwrap();
     }
 }
