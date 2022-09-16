@@ -1,15 +1,15 @@
+use std::any::Any;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use av_data::frame::ArcFrame;
 use av_data::packet::Packet;
 
-use crate::common::CodecList;
+use crate::common::CodecList2;
 use crate::error::*;
 
 /// Used to interact with a decoder.
 pub trait Decoder: Send + Sync {
-    // TODO support codec configuration using set_option
-    // fn open(&mut self) -> Result<()>;
     /// Saves the extra data contained in a codec.
     fn set_extradata(&mut self, extra: &[u8]);
     /// Sends to the decoder a packet to be decoded.
@@ -20,6 +20,14 @@ pub trait Decoder: Send + Sync {
     fn configure(&mut self) -> Result<()>;
     /// Tells decoder to clear its internal state.
     fn flush(&mut self) -> Result<()>;
+}
+
+/// Used to save some data contained in a decoder.
+pub trait SaveDecoderData<T> {
+    /// Saves some data contained in a decoder.
+    fn save_decoder_data(&self, context: &mut Context);
+    ///
+    fn get_data(&self) -> T;
 }
 
 /// Codec descriptor.
@@ -42,12 +50,13 @@ pub struct Descr {
 /// its additional data.
 pub struct Context {
     dec: Box<dyn Decoder>,
+    dec_data: Option<Arc<dyn Any + Send + Sync>>,
     // TODO: Queue up packets/frames
 }
 
 impl Context {
     // TODO: More constructors
-    /// Creates the decoder associated to a codec descriptor and encapsulates
+    /*/// Creates the decoder associated to a codec descriptor and encapsulates
     /// it into a new `Context`.
     ///
     /// The codec descriptor is contained in a codec list and retrieved by its
@@ -56,7 +65,13 @@ impl Context {
         codecs.by_name(name).map(|builder| Context {
             dec: builder.create(),
         })
+    }*/
+
+    /// Adds a decoder.
+    pub fn add_decoder<D: Decoder>(&mut self, dec: D) {
+        self.dec = Box::new(dec);
     }
+
     /// Saves the extra data contained in a codec.
     pub fn set_extradata(&mut self, extra: &[u8]) {
         self.dec.set_extradata(extra);
@@ -79,23 +94,28 @@ impl Context {
     pub fn flush(&mut self) -> Result<()> {
         self.dec.flush()
     }
+
+    ///
+    pub fn save_data(&mut self, data: impl SaveDecoderData) {
+        self.dec_data = Arc::new(data.get_data());
+    }
 }
 
 /// Used to get the descriptor of a codec and create its own decoder.
 pub trait Descriptor {
     /// Creates a new decoder for the requested codec.
-    fn create(&self) -> Box<dyn Decoder>;
+    fn create(&self, context: &mut Context);
     /// Returns the codec descriptor.
     fn describe(&self) -> &Descr;
 }
 
-/// A list of codec descriptors.
+/*/// A list of codec descriptors.
 pub struct Codecs {
-    list: HashMap<&'static str, Vec<&'static dyn Descriptor>>,
+    list: HashMap<&'static str, Vec<Box<dyn Descriptor<Decoder = dyn Decoder>>>>,
 }
 
-impl CodecList for Codecs {
-    type D = dyn Descriptor;
+impl CodecList2 for Codecs {
+    type D = dyn Descriptor<Decoder = dyn Decoder>;
 
     fn new() -> Self {
         Self {
@@ -104,9 +124,9 @@ impl CodecList for Codecs {
     }
 
     // TODO more lookup functions
-    fn by_name(&self, name: &str) -> Option<&'static Self::D> {
-        self.list.get(name).map(|descs| descs[0])
-    }
+    /*fn by_name(&self, name: &str) -> Option<&Box<&'static Self::D>> {
+        self.list.get(name).map(|descs| &descs[0])
+    }*/
 
     fn append(&mut self, desc: &'static Self::D) {
         let codec_name = desc.describe().codec;
@@ -116,7 +136,7 @@ impl CodecList for Codecs {
             .or_insert_with(Vec::new)
             .push(desc);
     }
-}
+}*/
 
 #[cfg(test)]
 mod test {
@@ -145,12 +165,18 @@ mod test {
                 }
 
                 impl Descriptor for Des {
-                    fn create(&self) -> Box<dyn Decoder> {
-                        Box::new(Dec::new(0))
+                    fn create(&self, context: &mut Context) {
+                        context.add_decoder(Dec::new(0));
                     }
 
                     fn describe(&self) -> &Descr {
                         &self.descr
+                    }
+                }
+
+                impl SaveDecoderData for Dec {
+                    fn save_decoder_data(&self, context: &mut Context) {
+                        context.save_data;
                     }
                 }
 
@@ -211,6 +237,11 @@ mod test {
     dec!(dummy_dec1, "dummy1", DUMMY_DESCR1);
 
     #[test]
+    fn data_handling() {
+      let context = Context::from_codecs(&codecs, name)
+    }
+
+    /*#[test]
     fn lookup_append() {
         let mut codecs = Codecs::new();
         codecs.append(DUMMY_DESCR);
@@ -218,9 +249,9 @@ mod test {
 
         codecs.by_name("dummy").unwrap();
         codecs.by_name("dummy1").unwrap();
-    }
+    }*/
 
-    #[test]
+    /*#[test]
     fn lookup_from_list() {
         let codecs = Codecs::from_list(&[DUMMY_DESCR, DUMMY_DESCR1]);
 
@@ -258,5 +289,5 @@ mod test {
 
         let mut context = Context::by_codecs(&codecs, "dummy").unwrap();
         context.send_packet(&packet).unwrap();
-    }
+    }*/
 }
